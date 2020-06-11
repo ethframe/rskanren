@@ -8,7 +8,7 @@ where
 {
     Disj(Box<Goal<U>>, Box<Goal<U>>),
     Conj(Box<Goal<U>>, Box<Goal<U>>),
-    Thunk(Rc<Fn(&mut State<U>) -> Goal<U>>),
+    Thunk(Rc<dyn Fn(&mut State<U>) -> Goal<U>>),
     Unify(U, U),
 }
 
@@ -113,6 +113,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::conde;
     use crate::goal;
     use crate::goal::Goal::*;
     use crate::unify;
@@ -126,23 +127,25 @@ mod tests {
     {
         let xc = x.clone();
         let outc = out.clone();
-        Disj(
-            Box::new(Unify(
+        conde!(
+            Unify(
                 Term::Pair(Box::new(x.clone()), Box::new(Term::Nil)),
                 out.clone(),
-            )),
-            Box::new(Thunk(Rc::new(move |state| {
+            ),
+            Thunk(Rc::new(move |state| {
                 let res = Term::Var(state.fresh());
                 let xt = xc.clone();
                 let rt = res.clone();
-                Conj(
-                    Box::new(Unify(
-                        Term::Pair(Box::new(xc.clone()), Box::new(res.clone())),
-                        outc.clone(),
-                    )),
-                    Box::new(Thunk(Rc::new(move |_| repeato(&xt, &rt)))),
+                conde!(
+                    {
+                        Unify(
+                            Term::Pair(Box::new(xc.clone()), Box::new(res.clone())),
+                            outc.clone(),
+                        ),
+                        Thunk(Rc::new(move |_| repeato(&xt, &rt)))
+                    }
                 )
-            }))),
+            }))
         )
     }
 
