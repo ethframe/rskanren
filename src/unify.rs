@@ -1,14 +1,13 @@
 use im::HashMap;
 use std::fmt;
-use std::hash::Hash;
 
 #[derive(Clone)]
 pub struct State<U>
 where
     U: Unify,
 {
-    subst: HashMap<U::Var, U>,
-    gen: U::Fresh,
+    subst: HashMap<VarIndex, Var<U>>,
+    next: usize,
 }
 
 impl<U> State<U>
@@ -18,69 +17,142 @@ where
     pub fn new() -> Self {
         State {
             subst: HashMap::new(),
-            gen: U::Fresh::default(),
+            next: 0,
         }
     }
 
-    pub fn fresh(&mut self) -> U::Var {
-        self.gen.fresh()
+    pub fn fresh(&mut self) -> Var<U> {
+        let var = Var::Var(VarIndex(self.next));
+        self.next += 1;
+        var
     }
 
-    fn get(&self, key: &U::Var) -> Option<&U> {
-        self.subst.get(key)
-    }
-
-    fn set(&mut self, key: U::Var, value: U) -> bool {
-        if value.occurs(&key, self) {
-            false
-        } else {
-            self.subst.insert(key, value);
-            true
-        }
-    }
-}
-
-pub trait Fresh: Clone + Default {
-    type Var: Eq + Hash + Clone;
-    fn fresh(&mut self) -> Self::Var;
-}
-
-pub trait Unify: Clone {
-    type Var: Eq + Hash + Clone;
-    type Fresh: Fresh<Var = Self::Var>;
-    fn unify(&self, other: &Self, state: &mut State<Self>) -> bool;
-    fn occurs(&self, var: &Self::Var, state: &State<Self>) -> bool;
-    fn to_var(&self) -> Option<&Self::Var>;
-    fn walk<'a>(&'a self, state: &'a State<Self>) -> &'a Self {
-        let mut res = self;
+    pub fn get<'a>(&'a self, mut val: &'a Var<U>) -> &'a Var<U> {
         loop {
-            match res.to_var() {
-                Some(var) => match state.get(var) {
-                    Some(val) => res = val,
-                    None => return res,
+            match val {
+                Var::Var(v) => match self.subst.get(v) {
+                    Some(v) => val = v,
+                    None => return val,
                 },
-                None => return res,
+                _ => return val,
             }
         }
     }
+
+    pub fn set(&mut self, var: VarIndex, val: Var<U>) -> () {
+        self.subst.insert(var, val);
+    }
+
+    fn assoc_val(var: VarIndex, val: Var<U>, state: &mut State<U>) -> bool
+    where
+        U: Unify,
+    {
+        if val.occurs(var, state) {
+            false
+        } else {
+            state.set(var, val);
+            true
+        }
+    }
+
+    fn assoc_var(var: VarIndex, val: VarIndex, state: &mut State<U>) -> bool
+    where
+        U: Unify,
+    {
+        if var != val {
+            state.set(var, Var::Var(val));
+        }
+        true
+    }
 }
 
-pub trait Reify: Unify {
+pub trait Unify: Clone {
+    fn occurs(&self, var: VarIndex, state: &State<Self>) -> bool;
+    fn unify(&self, other: &Self, state: &mut State<Self>) -> bool;
     fn reify(&self, state: &State<Self>) -> Self;
 }
 
-#[derive(PartialEq, Eq, Hash, Clone, Debug)]
-pub struct Var(usize);
+#[derive(PartialEq, Eq, Hash, Copy, Clone, Debug)]
+pub struct VarIndex(usize);
 
-#[derive(Clone, Default)]
-pub struct Gen(usize);
+#[derive(PartialEq, Clone)]
+pub enum Var<U>
+where
+    U: Unify,
+{
+    Var(VarIndex),
+    Val(Box<U>),
+}
 
-impl Fresh for Gen {
-    type Var = Var;
-    fn fresh(&mut self) -> Var {
-        let var = Var(self.0);
-        self.0 += 1;
-        var
+impl<U> fmt::Debug for Var<U>
+where
+    U: Unify + fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Var::Var(var) => write!(f, "Var({:?})", var.0),
+            Var::Val(val) => write!(f, "{:?}", val),
+        }
+    }
+}
+
+impl<U> Var<U>
+where
+    U: Unify,
+{
+    pub fn unwrap(&self) -> &U {
+        match self {
+            Var::Val(v) => v,
+            _ => panic!(),
+        }
+    }
+
+    pub fn is_var(&self) -> bool {
+        match self {
+            Var::Var(_) => true,
+            _ => false,
+        }
+    }
+
+    pub fn occurs(&self, var: VarIndex, state: &State<U>) -> bool {
+        match self {
+            Var::Val(v) => v.occurs(var, state),
+            Var::Var(v) => var == *v,
+        }
+    }
+
+    pub fn unify(&self, other: &Var<U>, state: &mut State<U>) -> bool {
+        let lhs = state.get(self);
+        let rhs = state.get(other);
+        match (lhs, rhs) {
+            (Var::Var(lvar), Var::Var(rvar)) => State::assoc_var(*lvar, *rvar, state),
+            (Var::Var(lvar), Var::Val(_)) => State::assoc_val(*lvar, rhs.clone(), state),
+            (Var::Val(_), Var::Var(rvar)) => State::assoc_val(*rvar, lhs.clone(), state),
+            (Var::Val(lval), Var::Val(rval)) => lval.clone().unify(&*rval.clone(), state),
+        }
+    }
+
+    pub fn reify(&self, state: &State<U>) -> Var<U> {
+        match state.get(self) {
+            Var::Var(var) => Var::Var(*var),
+            Var::Val(val) => Var::Val(Box::new(val.reify(state))),
+        }
+    }
+}
+
+pub trait AsVar<U>
+where
+    U: Unify,
+{
+    fn as_var(self) -> Var<U>;
+}
+
+impl<U> AsVar<U> for U
+where
+    U: Unify,
+{
+    fn as_var(self) -> Var<U> {
+        return Var::Val(Box::new(self));
     }
 }
 
@@ -89,9 +161,8 @@ pub enum Term<T>
 where
     T: PartialEq + Clone,
 {
-    Var(Var),
     Val(T),
-    Pair(Box<Term<T>>, Box<Term<T>>),
+    Pair(Var<Term<T>>, Var<Term<T>>),
     Nil,
 }
 
@@ -101,7 +172,6 @@ where
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Term::Var(var) => write!(f, "Var({:?})", var),
             Term::Val(val) => write!(f, "Val({:?})", val),
             Term::Pair(car, cdr) => write!(f, "Pair({:?}, {:?})", car, cdr),
             Term::Nil => write!(f, "Nil"),
@@ -113,72 +183,42 @@ impl<T> Unify for Term<T>
 where
     T: PartialEq + Clone,
 {
-    type Var = Var;
-    type Fresh = Gen;
-    fn unify(&self, other: &Self, state: &mut State<Self>) -> bool {
-        let lhs = self.walk(state).clone();
-        let rhs = other.walk(state).clone();
-        match &lhs {
-            Term::Var(lvar) => match &rhs {
-                Term::Var(rvar) if lvar == rvar => true,
-                _ => state.set(lvar.clone(), rhs),
-            },
-            Term::Val(lval) => match &rhs {
-                Term::Var(rvar) => state.set(rvar.clone(), lhs),
-                Term::Val(rval) => lval == rval,
-                _ => false,
-            },
-            Term::Pair(lcar, lcdr) => match &rhs {
-                Term::Var(rvar) => state.set(rvar.clone(), lhs),
-                Term::Pair(rcar, rcdr) => lcar.unify(rcar, state) && lcdr.unify(rcdr, state),
-                _ => false,
-            },
-            Term::Nil => match &rhs {
-                Term::Var(rvar) => state.set(rvar.clone(), lhs),
-                Term::Nil => true,
-                _ => false,
-            },
-        }
-    }
-    fn occurs(&self, var: &Var, state: &State<Self>) -> bool {
-        match self.walk(state) {
-            Term::Var(svar) => svar == var,
-            Term::Pair(scar, scdr) => scar.occurs(var, state) || scdr.occurs(var, state),
+    fn occurs(&self, var: VarIndex, state: &State<Self>) -> bool {
+        match self {
+            Term::Pair(a, d) => a.occurs(var, state) || d.occurs(var, state),
             _ => false,
         }
     }
-    fn to_var(&self) -> Option<&Var> {
-        match self {
-            Term::Var(var) => Some(var),
-            _ => None,
+
+    fn unify(&self, other: &Self, state: &mut State<Self>) -> bool {
+        match (self, other) {
+            (Term::Val(s), Term::Val(o)) => s == o,
+            (Term::Pair(sa, sd), Term::Pair(oa, od)) => {
+                sa.unify(&oa, state) && sd.unify(&od, state)
+            }
+            (Term::Nil, Term::Nil) => true,
+            _ => false,
         }
     }
-}
 
-impl<T> Reify for Term<T>
-where
-    T: PartialEq + Clone,
-{
     fn reify(&self, state: &State<Self>) -> Self {
-        let val = self.walk(state);
-        match val {
-            Term::Pair(car, cdr) => {
-                Term::Pair(Box::new(car.reify(state)), Box::new(cdr.reify(state)))
-            }
-            Term::Var(_) | Term::Val(_) | Term::Nil => val.clone(),
+        match self {
+            Term::Val(val) => Term::Val(val.clone()),
+            Term::Pair(car, cdr) => Term::Pair(car.reify(state), cdr.reify(state)),
+            Term::Nil => Term::Nil,
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::unify::{State, Term, Unify};
+    use crate::unify::{AsVar, State, Term, Unify};
 
     #[test]
     fn set_and_get() {
         let mut state = State::<Term<i32>>::new();
         let var = state.fresh();
-        state.set(var.clone(), Term::Val(1));
+        var.unify(&Term::Val(1).as_var(), &mut state);
         assert_eq!(state.get(&var).unwrap(), &Term::Val(1));
     }
 
@@ -186,16 +226,16 @@ mod tests {
     fn get_missing() {
         let mut state = State::<Term<i32>>::new();
         let var = state.fresh();
-        assert!(state.get(&var).is_none());
+        assert!(state.get(&var).is_var());
     }
 
     #[test]
     fn set_and_get_fresh() {
         let mut state = State::<Term<i32>>::new();
         let var = state.fresh();
-        state.set(var, Term::Val(1));
+        var.unify(&Term::Val(1).as_var(), &mut state);
         let var = state.fresh();
-        assert!(state.get(&var).is_none());
+        assert!(state.get(&var).is_var());
     }
 
     #[test]
@@ -203,8 +243,8 @@ mod tests {
         let mut state = State::<Term<i32>>::new();
         let lvar = state.fresh();
         let rvar = state.fresh();
-        let lpair = Term::Pair(Box::new(Term::Val(1)), Box::new(Term::Var(rvar.clone())));
-        let rpair = Term::Pair(Box::new(Term::Var(lvar.clone())), Box::new(Term::Val(2)));
+        let lpair = Term::Pair(Term::Val(1).as_var(), rvar.clone());
+        let rpair = Term::Pair(lvar.clone(), Term::Val(2).as_var());
         assert!(lpair.unify(&rpair, &mut state));
         assert_eq!(state.get(&lvar).unwrap(), &Term::Val(1));
         assert_eq!(state.get(&rvar).unwrap(), &Term::Val(2));
@@ -213,12 +253,26 @@ mod tests {
     #[test]
     fn chain_unify() {
         let mut state = State::<Term<i32>>::new();
-        let fst = Term::Var(state.fresh());
-        let snd = Term::Var(state.fresh());
+        let fst = state.fresh();
+        let snd = state.fresh();
         fst.unify(&snd, &mut state);
-        assert_eq!(fst.walk(&state), &snd);
-        fst.unify(&Term::Val(1), &mut state);
-        assert_eq!(fst.walk(&state), &Term::Val(1));
-        assert_eq!(snd.walk(&state), &Term::Val(1));
+        assert_eq!(state.get(&fst), &snd);
+        fst.unify(&Term::Val(1).as_var(), &mut state);
+        assert_eq!(state.get(&fst).unwrap(), &Term::Val(1));
+        assert_eq!(state.get(&snd).unwrap(), &Term::Val(1));
+    }
+
+    #[test]
+    fn reify_term() {
+        assert_eq!(0, 0);
+        let mut state = State::<Term<String>>::new();
+        let var = state.fresh();
+        let fst = Term::Pair(Term::Val("foo".to_owned()).as_var(), var.clone());
+        let snd = Term::Pair(
+            Term::Val("foo".to_owned()).as_var(),
+            Term::Val("bar".to_owned()).as_var(),
+        );
+        assert_eq!(fst.unify(&snd, &mut state), true);
+        assert_eq!(fst.reify(&state), snd.reify(&state));
     }
 }

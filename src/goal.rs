@@ -1,5 +1,5 @@
 use crate::stream::{Stream, StreamFn};
-use crate::unify::{State, Unify};
+use crate::unify::{State, Unify, Var};
 use std::rc::Rc;
 
 #[derive(Clone)]
@@ -10,7 +10,7 @@ where
     Disj(Box<Goal<U>>, Box<Goal<U>>),
     Conj(Box<Goal<U>>, Box<Goal<U>>),
     Thunk(Rc<dyn Fn(&mut State<U>) -> Goal<U>>),
-    Unify(U, U),
+    Unify(Var<U>, Var<U>),
 }
 
 impl<U> StreamFn<State<U>> for Goal<U>
@@ -38,15 +38,14 @@ where
 #[cfg(test)]
 mod tests {
     use crate::conde;
-    use crate::goal;
+    use crate::goal::Goal;
     use crate::goal::Goal::*;
     use crate::stream::Stream;
-    use crate::unify;
-    use crate::unify::{Reify, State, Term};
+    use crate::unify::{AsVar, State, Term, Var};
     use std::fmt;
     use std::rc::Rc;
 
-    fn repeato<T>(x: &unify::Term<T>, out: &unify::Term<T>) -> goal::Goal<unify::Term<T>>
+    fn repeato<T>(x: &Var<Term<T>>, out: &Var<Term<T>>) -> Goal<Term<T>>
     where
         T: PartialEq + Clone + fmt::Debug + 'static,
     {
@@ -54,17 +53,17 @@ mod tests {
         let outc = out.clone();
         conde!(
             Unify(
-                Term::Pair(Box::new(x.clone()), Box::new(Term::Nil)),
+                Term::Pair(x.clone(), Term::Nil.as_var()).as_var(),
                 out.clone(),
             ),
             Thunk(Rc::new(move |state| {
-                let res = Term::Var(state.fresh());
+                let res = state.fresh();
                 let xt = xc.clone();
                 let rt = res.clone();
                 conde!(
                     {
                         Unify(
-                            Term::Pair(Box::new(xc.clone()), Box::new(res.clone())),
+                            Term::Pair(xc.clone(), res.clone()).as_var(),
                             outc.clone(),
                         ),
                         Thunk(Rc::new(move |_| repeato(&xt, &rt)))
@@ -77,23 +76,24 @@ mod tests {
     #[test]
     fn test_repeato() {
         let mut state = State::<Term<char>>::new();
-        let out = Term::Var(state.fresh());
+        let out = state.fresh();
         let result = Stream::unit(state)
-            .bind(repeato(&Term::Val('*'), &out.clone()))
+            .bind(repeato(&Term::Val('*').as_var(), &out.clone()))
             .into_iter()
             .take(2)
             .collect::<Vec<State<Term<char>>>>();
         assert_eq!(result.len(), 2);
         assert_eq!(
             out.reify(&result[0]),
-            Term::Pair(Box::new(Term::Val('*')), Box::new(Term::Nil))
+            Term::Pair(Term::Val('*').as_var(), Term::Nil.as_var()).as_var()
         );
         assert_eq!(
             out.reify(&result[1]),
             Term::Pair(
-                Box::new(Term::Val('*')),
-                Box::new(Term::Pair(Box::new(Term::Val('*')), Box::new(Term::Nil)))
+                Term::Val('*').as_var(),
+                Term::Pair(Term::Val('*').as_var(), Term::Nil.as_var()).as_var()
             )
+            .as_var()
         );
     }
 }
