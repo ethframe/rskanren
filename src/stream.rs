@@ -140,7 +140,7 @@ mod tests {
         let res = Stream::from_iter([1, 2, 3, 4, 5].iter().copied())
             .bind(FnWrapper::new(|x| Stream::unit(x + 1)))
             .into_iter()
-            .collect::<Vec<i32>>();
+            .collect::<Vec<_>>();
         assert_eq!(res, [2, 3, 4, 5, 6]);
     }
 
@@ -149,7 +149,7 @@ mod tests {
         let res = Stream::from_iter([1, 2, 3].iter().copied())
             .bind(FnWrapper::new(|x| Stream::unit(x).mplus(Stream::unit(x))))
             .into_iter()
-            .collect::<Vec<i32>>();
+            .collect::<Vec<_>>();
         assert_eq!(res, [1, 1, 2, 2, 3, 3]);
     }
 }

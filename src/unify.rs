@@ -1,4 +1,5 @@
 use im::HashMap;
+use std::convert::From;
 use std::fmt;
 
 #[derive(Clone)]
@@ -39,14 +40,11 @@ where
         }
     }
 
-    pub fn set(&mut self, var: VarIndex, val: Var<U>) -> () {
+    pub fn set(&mut self, var: VarIndex, val: Var<U>) {
         self.subst.insert(var, val);
     }
 
-    fn assoc_val(var: VarIndex, val: Var<U>, state: &mut State<U>) -> bool
-    where
-        U: Unify,
-    {
+    fn assoc_val(var: VarIndex, val: Var<U>, state: &mut State<U>) -> bool {
         if val.occurs(var, state) {
             false
         } else {
@@ -55,10 +53,7 @@ where
         }
     }
 
-    fn assoc_var(var: VarIndex, val: VarIndex, state: &mut State<U>) -> bool
-    where
-        U: Unify,
-    {
+    fn assoc_var(var: VarIndex, val: VarIndex, state: &mut State<U>) -> bool {
         if var != val {
             state.set(var, Var::Var(val));
         }
@@ -140,19 +135,12 @@ where
     }
 }
 
-pub trait AsVar<U>
+impl<U> From<U> for Var<U>
 where
     U: Unify,
 {
-    fn as_var(self) -> Var<U>;
-}
-
-impl<U> AsVar<U> for U
-where
-    U: Unify,
-{
-    fn as_var(self) -> Var<U> {
-        return Var::Val(Box::new(self));
+    fn from(u: U) -> Var<U> {
+        return Var::Val(Box::new(u));
     }
 }
 
@@ -212,13 +200,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::unify::{AsVar, State, Term, Unify};
+    use crate::unify::{State, Term, Unify};
 
     #[test]
     fn set_and_get() {
         let mut state = State::<Term<i32>>::new();
         let var = state.fresh();
-        var.unify(&Term::Val(1).as_var(), &mut state);
+        var.unify(&Term::Val(1).into(), &mut state);
         assert_eq!(state.get(&var).unwrap(), &Term::Val(1));
     }
 
@@ -233,7 +221,7 @@ mod tests {
     fn set_and_get_fresh() {
         let mut state = State::<Term<i32>>::new();
         let var = state.fresh();
-        var.unify(&Term::Val(1).as_var(), &mut state);
+        var.unify(&Term::Val(1).into(), &mut state);
         let var = state.fresh();
         assert!(state.get(&var).is_var());
     }
@@ -243,8 +231,8 @@ mod tests {
         let mut state = State::<Term<i32>>::new();
         let lvar = state.fresh();
         let rvar = state.fresh();
-        let lpair = Term::Pair(Term::Val(1).as_var(), rvar.clone());
-        let rpair = Term::Pair(lvar.clone(), Term::Val(2).as_var());
+        let lpair = Term::Pair(Term::Val(1).into(), rvar.clone());
+        let rpair = Term::Pair(lvar.clone(), Term::Val(2).into());
         assert!(lpair.unify(&rpair, &mut state));
         assert_eq!(state.get(&lvar).unwrap(), &Term::Val(1));
         assert_eq!(state.get(&rvar).unwrap(), &Term::Val(2));
@@ -257,7 +245,7 @@ mod tests {
         let snd = state.fresh();
         fst.unify(&snd, &mut state);
         assert_eq!(state.get(&fst), &snd);
-        fst.unify(&Term::Val(1).as_var(), &mut state);
+        fst.unify(&Term::Val(1).into(), &mut state);
         assert_eq!(state.get(&fst).unwrap(), &Term::Val(1));
         assert_eq!(state.get(&snd).unwrap(), &Term::Val(1));
     }
@@ -267,10 +255,10 @@ mod tests {
         assert_eq!(0, 0);
         let mut state = State::<Term<String>>::new();
         let var = state.fresh();
-        let fst = Term::Pair(Term::Val("foo".to_owned()).as_var(), var.clone());
+        let fst = Term::Pair(Term::Val("foo".to_owned()).into(), var.clone());
         let snd = Term::Pair(
-            Term::Val("foo".to_owned()).as_var(),
-            Term::Val("bar".to_owned()).as_var(),
+            Term::Val("foo".to_owned()).into(),
+            Term::Val("bar".to_owned()).into(),
         );
         assert_eq!(fst.unify(&snd, &mut state), true);
         assert_eq!(fst.reify(&state), snd.reify(&state));
